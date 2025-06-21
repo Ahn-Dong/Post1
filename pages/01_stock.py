@@ -1,72 +1,125 @@
 import streamlit as st
+
 import yfinance as yf
+
+import pandas as pd
+
 import plotly.graph_objs as go
+
 from datetime import datetime, timedelta
 
-# 📌 글로벌 시가총액 TOP10 (2025년 기준 예시)
-top10_stocks = {
-    'Apple': 'AAPL',
-    'Microsoft': 'MSFT',
-    'NVIDIA': 'NVDA',
-    'Amazon': 'AMZN',
-    'Alphabet (Google)': 'GOOGL',
-    'Meta (Facebook)': 'META',
-    'Berkshire Hathaway': 'BRK-B',  # 주의: yfinance에서는 BRK-B → BRK.B로 처리
-    'Tesla': 'TSLA',
-    'TSMC': 'TSM',
-    'Eli Lilly': 'LLY'
+st.title("글로벌 시가총액 TOP10 기업의 최근 1년간 주가 변화")
+
+top10 = {
+
+    'AAPL': 'Apple',
+
+    'MSFT': 'Microsoft',
+
+    'GOOGL': 'Alphabet (Google)',
+
+    'AMZN': 'Amazon',
+
+    'NVDA': 'Nvidia',
+
+    'META': 'Meta Platforms',
+
+    'BRK-B': 'Berkshire Hathaway',
+
+    'TSLA': 'Tesla',
+
+    'LLY': 'Eli Lilly',
+
+    'TSM': 'TSMC'
+
 }
 
-# 🗓️ 1년간 데이터
-end_date = datetime.today()
-start_date = end_date - timedelta(days=365)
+st.write("조회 기업:")
 
-# 🧠 페이지 설정
-st.set_page_config(page_title="글로벌 주가 추이 비교", layout="wide")
-st.title("📈 글로벌 시가총액 TOP10 기업 주가 변화")
-st.markdown("최근 1년간의 주가 흐름을 비교해보세요. (Plotly 기반 시각화)")
-st.markdown("---")
+st.write(", ".join([f"{v}({k})" for k, v in top10.items()]))
 
-# ✅ 기업 선택
-selected_companies = st.multiselect(
-    "🔎 비교할 기업을 선택하세요:",
-    list(top10_stocks.keys()),
-    default=['Apple', 'Microsoft', 'NVIDIA', 'Amazon', 'Alphabet (Google)']
-)
+end = datetime.today()
 
-# 📊 그래프 초기화
-fig = go.Figure()
+start = end - timedelta(days=365)
 
-if selected_companies:
-    for name in selected_companies:
-        ticker = top10_stocks[name].replace("-", ".")  # ⚠️ BRK-B → BRK.B 형태 처리
-        data = yf.download(ticker, start=start_date, end=end_date, progress=False)
+with st.spinner("데이터를 가져오고 있습니다..."):
 
-        # ✅ 유효성 검사
-        if not data.empty and "Close" in data.columns:
-            data = data.dropna(subset=["Close"])
-            if not data["Close"].isnull().all():
-                fig.add_trace(go.Scatter(
-                    x=data.index,
-                    y=data["Close"],
-                    mode='lines',
-                    name=name
-                ))
-            else:
-                st.warning(f"⚠️ {name}의 종가 데이터가 없습니다.")
-        else:
-            st.warning(f"⚠️ {name}의 주가 데이터를 불러올 수 없거나 유효하지 않습니다.")
+    data = yf.download(list(top10.keys()), start=start, end=end, group_by='ticker', auto_adjust=True)
 
-    # 📈 그래프 설정
-    fig.update_layout(
-        title="📊 최근 1년간 주가 비교",
-        xaxis_title="날짜",
-        yaxis_title="종가 (USD)",
-        hovermode="x",  # unified 대신 일반 hover
-        template="plotly_white"
-    )
+# 데이터 구조 자동 감지
 
-    st.plotly_chart(fig, use_container_width=True)
+if isinstance(data.columns, pd.MultiIndex):
+
+    # 야후파이낸스 종목 여러 개 → MultiIndex
+
+    # 구조 확인: 보통 ('AAPL', 'Adj Close'), ...
+
+    # level 0: 티커, level 1: 속성
+
+    if "Adj Close" in data.columns.get_level_values(1):
+
+        # 각 티커별 "Adj Close"만 추출
+
+        adj_close = pd.DataFrame({ticker: data[ticker]['Adj Close'] for ticker in top10 if ticker in data.columns.get_level_values(0)})
+
+    elif "Close" in data.columns.get_level_values(1):
+
+        adj_close = pd.DataFrame({ticker: data[ticker]['Close'] for ticker in top10 if ticker in data.columns.get_level_values(0)})
+
+    else:
+
+        st.error("데이터에서 'Adj Close' 또는 'Close' 값을 찾을 수 없습니다.")
+
+        st.write(data.head())
+
+        st.stop()
 
 else:
-    st.info("👆 위에서 기업을 선택해 주세요.")
+
+    # 단일 컬럼 (종목 1개 등) 혹은 Wide-Format
+
+    if "Adj Close" in data.columns:
+
+        adj_close = data["Adj Close"].to_frame()
+
+    elif "Close" in data.columns:
+
+        adj_close = data["Close"].to_frame()
+
+    else:
+
+        st.error("데이터에서 'Adj Close' 또는 'Close' 값을 찾을 수 없습니다.")
+
+        st.write(data.head())
+
+        st.stop()
+
+adj_close = adj_close.fillna(method="ffill")
+
+fig = go.Figure()
+
+for ticker, name in top10.items():
+
+    if ticker in adj_close.columns:
+
+        fig.add_trace(go.Scatter(
+
+            x=adj_close.index, y=adj_close[ticker], mode='lines', name=name
+
+        ))
+
+fig.update_layout(
+
+    title='글로벌 시가총액 TOP10 기업 주가 변화 (최근 1년)',
+
+    xaxis_title='날짜',
+
+    yaxis_title='종가(USD)',
+
+    legend_title='기업명',
+
+    height=600
+
+)
+
+st.plotly_chart(fig, use_container_width=True)
